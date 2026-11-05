@@ -1,15 +1,16 @@
 import {
     isValidEmail,
     isValidObjectId,
+    normalizeEmail,
     toObjectId,
-} from '../validation.js';
+} from '../lib/validation.js';
 
 const BORROW_DAYS = 14;
 
 export function registerBorrowRoutes(app, booksCollection, borrowsCollection) {
     app.post('/borrows', async (req, res) => {
         const { bookId, userEmail } = req.body ?? {};
-        const email = typeof userEmail === 'string' ? userEmail.trim().toLowerCase() : '';
+        const email = normalizeEmail(userEmail);
 
         if (!isValidObjectId(bookId) || !isValidEmail(email)) {
             return res.status(400).send({
@@ -60,7 +61,7 @@ export function registerBorrowRoutes(app, booksCollection, borrowsCollection) {
 
     app.get('/borrows', async (req, res) => {
         const emailValue = req.query.email ?? req.query.userEmail;
-        const email = typeof emailValue === 'string' ? emailValue.trim().toLowerCase() : '';
+        const email = normalizeEmail(emailValue);
         if (!isValidEmail(email)) {
             return res.status(400).send({ success: false, message: 'A valid email query parameter is required.' });
         }

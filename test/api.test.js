@@ -2,7 +2,7 @@ import assert from 'node:assert/strict';
 import { once } from 'node:events';
 import { test } from 'node:test';
 import { ObjectId } from 'mongodb';
-import { createApp } from '../app.js';
+import { createApp } from '../lib/app.js';
 
 class FakeCollection {
     constructor(documents = []) {

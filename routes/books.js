@@ -1,10 +1,11 @@
 import {
     isValidEmail,
     isValidObjectId,
+    normalizeEmail,
     normalizeBookUpdate,
     normalizeNewBook,
     toObjectId,
-} from '../validation.js';
+} from '../lib/validation.js';
 
 export function registerBookRoutes(app, booksCollection, borrowsCollection) {
     app.get('/books', async (req, res) => {
@@ -35,7 +36,7 @@ export function registerBookRoutes(app, booksCollection, borrowsCollection) {
     });
 
     app.get('/my-books/:email', async (req, res) => {
-        const email = req.params.email.trim().toLowerCase();
+        const email = normalizeEmail(req.params.email);
         if (!isValidEmail(email)) {
             return res.status(400).send({ success: false, message: 'A valid email is required.' });
         }

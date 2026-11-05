@@ -1,6 +1,6 @@
 import 'dotenv/config';
 import { MongoClient } from 'mongodb';
-import { createApp } from './app.js';
+import { createApp } from './lib/app.js';
 
 const PORT = process.env.PORT || 5000;
 const mongoUri = process.env.MONGODB_SECRET_URI;

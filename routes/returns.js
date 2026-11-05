@@ -1,4 +1,4 @@
-import { isValidObjectId, toObjectId } from '../validation.js';
+import { isValidObjectId, toObjectId } from '../lib/validation.js';
 
 export function registerReturnRoutes(app, booksCollection, borrowsCollection) {
     app.delete('/borrows/:id', async (req, res) => {
