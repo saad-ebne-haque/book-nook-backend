@@ -52,8 +52,19 @@ app.get('/books', async (req, res) => {
     res.send(allBooks);
 })
 
+app.post('/books', async (req, res) => {
 
+    const newBook = req.body;
+    const result = await books.insertOne(newBook);
+    res.send(result);
 
+})
+
+app.get('/my-books/:email', async (req, res) => {
+    const email = req.params.email;
+    const myBooks = await books.find({ addedBy: email }).sort({ _id: -1 }).toArray();
+    res.send(myBooks);
+})
 
 if (!process.env.VERCEL) {
     app.listen(PORT, () => {
