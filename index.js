@@ -1,7 +1,7 @@
 
 import express from "express";
 import cors from "cors";
-import { MongoClient } from 'mongodb';
+import { MongoClient, ObjectId } from 'mongodb';
 import "dotenv/config";
 
 
@@ -48,8 +48,17 @@ app.get("/", (req, res) => {
 
 app.get('/books', async (req, res) => {
 
-    const allBooks = await books.find({}).sort({ _id: -1 }).toArray();
+    const allBooks = await books.find({}).toArray();
     res.send(allBooks);
+})
+
+app.get('/books/:id', async (req, res) => {
+
+    const id = req.params.id;
+
+    const singleBook = await books.findOne({ _id: new ObjectId(id) });
+    res.send(singleBook);
+
 })
 
 app.post('/books', async (req, res) => {
@@ -59,6 +68,30 @@ app.post('/books', async (req, res) => {
     res.send(result);
 
 })
+
+app.patch('/books/:id', async (req, res) => {
+
+    const id = req.params.id;
+    const updatedBook = req.body;
+    const query = { _id: new ObjectId(id) };
+
+    const result = await books.updateOne(query, { $set: updatedBook });
+    res.send(result);
+
+
+});
+
+app.delete('/books/:id', async (req, res) => {
+
+    const id = req.params.id;
+    const query = { _id: new ObjectId(id) };
+
+    const result = await books.deleteOne(query);
+    res.send(result);
+
+
+});
+
 
 app.get('/my-books/:email', async (req, res) => {
     const email = req.params.email;
