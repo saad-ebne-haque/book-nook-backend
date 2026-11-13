@@ -29,7 +29,7 @@ export async function connectToMongoDB() {
 const connectedClient = await connectToMongoDB();
 const db = connectedClient.db('book-nook');
 const books = db.collection('books');
-
+const borrowedBooks = db.collection('borrowed-books');
 /* ================MongoDB==================== */
 
 
@@ -91,6 +91,40 @@ app.delete('/books/:id', async (req, res) => {
 
 
 });
+
+app.post('/borrowed-books', async (req, res) => {
+    try {
+        const newBorrowedBook = req.body;
+
+        const alreadyBorrowed = await borrowedBooks.findOne({
+            bookId: newBorrowedBook.bookId,
+            borrowerEmail: newBorrowedBook.borrowerEmail
+        });
+
+        if (alreadyBorrowed) {
+            return res.status(409).send({
+                success: false,
+                message: "You have already borrowed this book!"
+            });
+
+            // throw new Error('You have already borrowed this book!')
+
+        }
+        const result = await borrowedBooks.insertOne(newBorrowedBook);
+
+        res.status(201).send({
+            success: true,
+            message: "Book borrowed successfully!",
+            result
+        })
+    } catch (error) {
+        res.status(500).send({
+            success: false,
+            message: "Something went wrong!",
+            error: error.message
+        });
+    }
+})
 
 
 app.get('/my-books/:email', async (req, res) => {
