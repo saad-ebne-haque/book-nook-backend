@@ -2,14 +2,89 @@
 import express from "express";
 import cors from "cors";
 import { MongoClient, ObjectId } from 'mongodb';
+import { createRemoteJWKSet, errors as joseErrors, jwtVerify } from "jose";
 import "dotenv/config";
 
 
 const app = express();
 const PORT = process.env.PORT || 5000;
+const betterAuthURL = process.env.BETTER_AUTH_URL;
+
+if (!betterAuthURL) {
+    throw new Error("BETTER_AUTH_URL must be configured for API JWT verification");
+}
+
+const authURL = new URL(betterAuthURL);
+const authPath = authURL.pathname.replace(/\/+$/, "");
+const authBasePath = authPath.endsWith("/api/auth")
+    ? authPath
+    : `${authPath}/api/auth`;
+authURL.pathname = `${authBasePath}/jwks`;
+authURL.search = "";
+authURL.hash = "";
+const authJwks = createRemoteJWKSet(authURL);
 
 app.use(cors());
 app.use(express.json());
+
+async function requireAuth(req, res, next) {
+    const authorization = req.get("authorization");
+    const match = authorization?.match(/^Bearer\s+(.+)$/i);
+
+    if (!match) {
+        return res.status(401).json({
+            success: false,
+            message: "A valid bearer token is required",
+            data: null,
+        });
+    }
+
+    try {
+        const { payload } = await jwtVerify(match[1], authJwks, {
+            issuer: betterAuthURL,
+            audience: betterAuthURL,
+        });
+
+        if (typeof payload.sub !== "string" || typeof payload.email !== "string") {
+            return res.status(401).json({
+                success: false,
+                message: "The bearer token does not contain a valid user",
+                data: null,
+            });
+        }
+
+        req.auth = {
+            userId: payload.sub,
+            email: payload.email,
+            name: typeof payload.name === "string" ? payload.name : null,
+        };
+        return next();
+    } catch (error) {
+        if (error instanceof joseErrors.JWKSTimeout) {
+            console.error("Better Auth JWKS endpoint timed out", error);
+            return res.status(503).json({
+                success: false,
+                message: "Authentication service is temporarily unavailable",
+                data: null,
+            });
+        }
+
+        if (error instanceof joseErrors.JOSEError) {
+            return res.status(401).json({
+                success: false,
+                message: "The bearer token is invalid or expired",
+                data: null,
+            });
+        }
+
+        console.error("JWT verification failed", error);
+        return res.status(503).json({
+            success: false,
+            message: "Authentication service is temporarily unavailable",
+            data: null,
+        });
+    }
+}
 
 /* ================MongoDB==================== */
 
@@ -79,7 +154,7 @@ app.get('/books', async (req, res) => {
     });
 })
 
-app.get('/books/:id', async (req, res) => {
+app.get('/books/:id', requireAuth, async (req, res) => {
     const id = req.params.id;
     // Check whether this ID has a valid MongoDB ObjectId format.
     const isIdValid = ObjectId.isValid(id);
@@ -107,7 +182,7 @@ app.get('/books/:id', async (req, res) => {
     });
 })
 
-app.post('/books', async (req, res) => {
+app.post('/books', requireAuth, async (req, res) => {
     const newBook = req.body;
     if (newBook === null || newBook === undefined) {
         return res.status(400).json({
@@ -141,7 +216,21 @@ app.post('/books', async (req, res) => {
         });
     }
 
-    const result = await books.insertOne(newBook);
+    if ("_id" in newBook) {
+        return res.status(400).json({
+            success: false,
+            message: "A book ID cannot be supplied",
+            data: null,
+        });
+    }
+
+    const bookToInsert = {
+        ...newBook,
+        addedBy: req.auth.email,
+        addedByName: req.auth.name,
+        createdAt: new Date().toISOString(),
+    };
+    const result = await books.insertOne(bookToInsert);
     return res.status(201).json({
         success: true,
         message: "Book added successfully",
@@ -150,7 +239,7 @@ app.post('/books', async (req, res) => {
 
 })
 
-app.patch('/books/:id', async (req, res) => {
+app.patch('/books/:id', requireAuth, async (req, res) => {
     const id = req.params.id;
     const updatedBook = req.body;
     const isIdValid = ObjectId.isValid(id);
@@ -194,22 +283,23 @@ app.patch('/books/:id', async (req, res) => {
         });
     }
 
-    if ("_id" in updatedBook) {
+    const protectedFields = ["_id", "addedBy", "addedByName", "availableCopies", "createdAt"];
+    if (protectedFields.some((field) => field in updatedBook)) {
         return res.status(400).json({
             success: false,
-            message: "A valid book update is required",
+            message: "Book ownership and inventory fields cannot be updated",
             data: null,
         });
     }
 
     const result = await books.updateOne(
-        { _id: new ObjectId(id) },
+        { _id: new ObjectId(id), addedBy: req.auth.email },
         { $set: updatedBook }
     );
     if (result.matchedCount === 0) {
         return res.status(404).json({
             success: false,
-            message: "Book not found",
+            message: "Book not found or you are not allowed to update it",
             data: null,
         });
     }
@@ -222,7 +312,7 @@ app.patch('/books/:id', async (req, res) => {
 
 });
 
-app.delete('/books/:id', async (req, res) => {
+app.delete('/books/:id', requireAuth, async (req, res) => {
     const id = req.params.id;
     const isIdValid = ObjectId.isValid(id);
     if (isIdValid === false) {
@@ -233,11 +323,14 @@ app.delete('/books/:id', async (req, res) => {
         });
     }
 
-    const result = await books.deleteOne({ _id: new ObjectId(id) });
+    const result = await books.deleteOne({
+        _id: new ObjectId(id),
+        addedBy: req.auth.email,
+    });
     if (result.deletedCount === 0) {
         return res.status(404).json({
             success: false,
-            message: "Book not found",
+            message: "Book not found or you are not allowed to delete it",
             data: null,
         });
     }
@@ -250,14 +343,14 @@ app.delete('/books/:id', async (req, res) => {
 
 });
 
-app.post('/borrows', async (req, res) => {
+app.post('/borrows', requireAuth, async (req, res) => {
     try {
         const borrowedBook = req.body;
 
         if (borrowedBook === null || borrowedBook === undefined) {
             return res.status(400).json({
                 success: false,
-                message: "A valid book ID and borrower email are required",
+                message: "A valid book ID and return date are required",
                 data: null,
             });
         }
@@ -265,7 +358,7 @@ app.post('/borrows', async (req, res) => {
         if (typeof borrowedBook !== "object") {
             return res.status(400).json({
                 success: false,
-                message: "A valid book ID and borrower email are required",
+                message: "A valid book ID and return date are required",
                 data: null,
             });
         }
@@ -273,7 +366,7 @@ app.post('/borrows', async (req, res) => {
         if (Array.isArray(borrowedBook)) {
             return res.status(400).json({
                 success: false,
-                message: "A valid book ID and borrower email are required",
+                message: "A valid book ID and return date are required",
                 data: null,
             });
         }
@@ -281,7 +374,7 @@ app.post('/borrows', async (req, res) => {
         if (typeof borrowedBook.bookId !== "string") {
             return res.status(400).json({
                 success: false,
-                message: "A valid book ID and borrower email are required",
+                message: "A valid book ID and return date are required",
                 data: null,
             });
         }
@@ -290,30 +383,46 @@ app.post('/borrows', async (req, res) => {
         if (isBookIdValid === false) {
             return res.status(400).json({
                 success: false,
-                message: "A valid book ID and borrower email are required",
+                message: "A valid book ID and return date are required",
                 data: null,
             });
         }
 
-        if (typeof borrowedBook.borrowerEmail !== "string") {
+        if (typeof borrowedBook.returnDate !== "string" || !/^\d{4}-\d{2}-\d{2}$/.test(borrowedBook.returnDate)) {
             return res.status(400).json({
                 success: false,
-                message: "A valid book ID and borrower email are required",
+                message: "A valid return date is required",
                 data: null,
             });
         }
 
-        if (borrowedBook.borrowerEmail.trim() === "") {
+        const returnDate = new Date(`${borrowedBook.returnDate}T00:00:00.000Z`);
+        const todayDate = new Date().toISOString().slice(0, 10);
+        if (
+            Number.isNaN(returnDate.getTime())
+            || returnDate.toISOString().slice(0, 10) !== borrowedBook.returnDate
+            || borrowedBook.returnDate < todayDate
+        ) {
             return res.status(400).json({
                 success: false,
-                message: "A valid book ID and borrower email are required",
+                message: "The return date must be today or later",
+                data: null,
+            });
+        }
+
+        const bookObjectId = new ObjectId(borrowedBook.bookId);
+        const book = await books.findOne({ _id: bookObjectId });
+        if (!book) {
+            return res.status(404).json({
+                success: false,
+                message: "Book not found",
                 data: null,
             });
         }
 
         const alreadyBorrowed = await borrows.findOne({
             bookId: borrowedBook.bookId,
-            borrowerEmail: borrowedBook.borrowerEmail,
+            borrowerEmail: req.auth.email,
         });
         if (alreadyBorrowed) {
             return res.status(409).json({
@@ -325,7 +434,7 @@ app.post('/borrows', async (req, res) => {
 
         const updateBook = await books.updateOne(
             {
-                _id: new ObjectId(borrowedBook.bookId),
+                _id: bookObjectId,
                 $expr: {
                     $gt: [{ $toInt: '$availableCopies' }, 0],
                 },
@@ -353,7 +462,16 @@ app.post('/borrows', async (req, res) => {
             });
         }
 
-        const result = await borrows.insertOne(borrowedBook);
+        const { _id: borrowedObjectId, ...bookData } = book;
+        const borrowRecord = {
+            ...bookData,
+            bookId: borrowedObjectId.toString(),
+            borrowerEmail: req.auth.email,
+            borrowerName: req.auth.name,
+            borrowedDate: todayDate,
+            returnDate: borrowedBook.returnDate,
+        };
+        const result = await borrows.insertOne(borrowRecord);
         return res.status(201).json({
             success: true,
             message: "Book borrowed successfully",
@@ -370,7 +488,7 @@ app.post('/borrows', async (req, res) => {
 })
 
 
-app.delete('/borrows/:id', async (req, res) => {
+app.delete('/borrows/:id', requireAuth, async (req, res) => {
     try {
         const id = req.params.id;
         const isBorrowIdValid = ObjectId.isValid(id);
@@ -382,11 +500,14 @@ app.delete('/borrows/:id', async (req, res) => {
             });
         }
 
-        const borrow = await borrows.findOne({ _id: new ObjectId(id) });
+        const borrow = await borrows.findOne({
+            _id: new ObjectId(id),
+            borrowerEmail: req.auth.email,
+        });
         if (!borrow) {
             return res.status(404).json({
                 success: false,
-                message: "Borrow record not found",
+                message: "Borrow record not found or you are not allowed to return it",
                 data: null,
             });
         }
@@ -449,28 +570,10 @@ app.delete('/borrows/:id', async (req, res) => {
     }
 })
 
-app.get("/borrows", async (req, res) => {
+app.get("/borrows", requireAuth, async (req, res) => {
     try {
-        const { borrowerEmail } = req.query;
-
-        if (typeof borrowerEmail !== "string") {
-            return res.status(400).json({
-                success: false,
-                message: "A borrower email is required",
-                data: null,
-            });
-        }
-
-        if (borrowerEmail.trim() === "") {
-            return res.status(400).json({
-                success: false,
-                message: "A borrower email is required",
-                data: null,
-            });
-        }
-
         const result = await borrows
-            .find({ borrowerEmail })
+            .find({ borrowerEmail: req.auth.email })
             .toArray();
 
         return res.status(200).json({
@@ -488,8 +591,16 @@ app.get("/borrows", async (req, res) => {
     }
 });
 
-app.get('/my-books/:email', async (req, res) => {
-    const email = req.params.email;
+app.get('/my-books/:email', requireAuth, async (req, res) => {
+    if (req.params.email !== req.auth.email) {
+        return res.status(403).json({
+            success: false,
+            message: "You can only view your own books",
+            data: null,
+        });
+    }
+
+    const email = req.auth.email;
     const myBooks = await books.find({ addedBy: email }).sort({ _id: -1 }).toArray();
     return res.status(200).json({
         success: true,
