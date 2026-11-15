@@ -94,37 +94,123 @@ app.delete('/books/:id', async (req, res) => {
 
 app.post('/borrowed-books', async (req, res) => {
     try {
-        const newBorrowedBook = req.body;
+        const borrowedBook = req.body;
 
         const alreadyBorrowed = await borrowedBooks.findOne({
-            bookId: newBorrowedBook.bookId,
-            borrowerEmail: newBorrowedBook.borrowerEmail
-        });
+            bookId: borrowedBook.bookId,
+            borrowerEmail: borrowedBook.borrowerEmail,
+        })
 
         if (alreadyBorrowed) {
             return res.status(409).send({
                 success: false,
-                message: "You have already borrowed this book!"
+                message: "You have already borrowed this book!",
             });
-
-            // throw new Error('You have already borrowed this book!')
-
         }
-        const result = await borrowedBooks.insertOne(newBorrowedBook);
+
+        const updateBook = await books.updateOne(
+            {
+                _id: new ObjectId(borrowedBook.bookId),
+                $expr: {
+                    $gt: [{ $toInt: '$availableCopies' }, 0],
+                },
+            },
+            [
+                {
+                    $set: {
+                        availableCopies: {
+                            $toString: {
+                                $subtract: [
+                                    { $toInt: '$availableCopies' },
+                                    1,
+                                ]
+                            }
+                        }
+                    }
+                }
+            ]
+        );
+
+        if (updateBook.modifiedCount === 0) {
+            return res.status(400).send({
+                success: false,
+                message: "Book is not available!"
+            });
+        }
+
+        const result = await borrowedBooks.insertOne(borrowedBook);
 
         res.status(201).send({
             success: true,
             message: "Book borrowed successfully!",
+            result,
+        });
+
+    } catch (err) {
+        res.status(500).send({
+            success: false,
+            message: err.message || "Something went wrong!",
+        })
+    }
+})
+
+
+app.delete('/borrowed-books/:id', async (req, res) => {
+    try {
+        const id = req.params.id
+        const { bookId } = req.body
+
+        const updateBook = await books.updateOne(
+            { _id: new ObjectId(bookId) },
+            [{
+                $set: {
+                    availableCopies: {
+                        $toString: {
+                            $add: [
+                                { $toInt: '$availableCopies' }, 1
+                            ]
+                        }
+                    }
+                }
+            }]
+        );
+
+        const result = await borrowedBooks.deleteOne({ _id: new ObjectId(id) });
+
+        res.send({
+            success: true,
+            message: 'you successfully returned this book',
+            updateBook,
             result
         })
+
+    } catch (err) {
+        res.status(500).send({
+            success: false,
+            message: err.message || "Something went wrong!",
+        })
+    }
+})
+
+
+
+app.get("/borrowed-books", async (req, res) => {
+    try {
+        const { borrowerEmail } = req.query;
+
+        const result = await borrowedBooks
+            .find({ borrowerEmail })
+            .toArray();
+
+        res.send(result);
     } catch (error) {
         res.status(500).send({
             success: false,
-            message: "Something went wrong!",
-            error: error.message
+            message: "Failed to fetch borrowed books",
+            error: error.message,
         });
     }
-})
+});
 
 
 app.get('/my-books/:email', async (req, res) => {
