@@ -53,6 +53,7 @@ async function requireAuth(req, res, next) {
             });
         }
 
+         
         req.auth = {
             userId: payload.sub,
             email: payload.email,
