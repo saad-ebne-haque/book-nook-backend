@@ -49,7 +49,29 @@ app.get("/", (req, res) => {
 
 
 app.get('/books', async (req, res) => {
-    const allBooks = await books.find({}).toArray();
+    const cursor = books.find({});
+    if (req.query.limit !== undefined) {
+        if (typeof req.query.limit !== "string" || !/^[1-9]\d*$/.test(req.query.limit)) {
+            return res.status(400).json({
+                success: false,
+                message: "Limit must be a positive integer",
+                data: null,
+            });
+        }
+
+        const limit = Number(req.query.limit);
+        if (!Number.isSafeInteger(limit) || limit > 50) {
+            return res.status(400).json({
+                success: false,
+                message: "Limit must be between 1 and 50",
+                data: null,
+            });
+        }
+
+        cursor.sort({ createdAt: -1, _id: -1 }).limit(limit);
+    }
+
+    const allBooks = await cursor.toArray();
     return res.status(200).json({
         success: true,
         message: "Books retrieved successfully",
