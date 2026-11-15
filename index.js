@@ -105,6 +105,10 @@ const connectedClient = await connectToMongoDB();
 const db = connectedClient.db('book-nook');
 const books = db.collection('books');
 const borrows = db.collection('borrows');
+await books.updateMany(
+    { availableCopies: { $type: "string" } },
+    [{ $set: { availableCopies: { $toInt: "$availableCopies" } } }]
+);
 /* ================MongoDB==================== */
 
 
@@ -221,6 +225,14 @@ app.post('/books', requireAuth, async (req, res) => {
         return res.status(400).json({
             success: false,
             message: "A book ID cannot be supplied",
+            data: null,
+        });
+    }
+
+    if (!Number.isSafeInteger(newBook.availableCopies) || newBook.availableCopies < 0) {
+        return res.status(400).json({
+            success: false,
+            message: "Available copies must be a non-negative integer",
             data: null,
         });
     }
@@ -436,24 +448,9 @@ app.post('/borrows', requireAuth, async (req, res) => {
         const updateBook = await books.updateOne(
             {
                 _id: bookObjectId,
-                $expr: {
-                    $gt: [{ $toInt: '$availableCopies' }, 0],
-                },
+                availableCopies: { $gt: 0 },
             },
-            [
-                {
-                    $set: {
-                        availableCopies: {
-                            $toString: {
-                                $subtract: [
-                                    { $toInt: '$availableCopies' },
-                                    1,
-                                ]
-                            }
-                        }
-                    }
-                }
-            ]
+            { $inc: { availableCopies: -1 } }
         );
         if (updateBook.modifiedCount === 0) {
             return res.status(409).json({
@@ -524,17 +521,7 @@ app.delete('/borrows/:id', requireAuth, async (req, res) => {
 
         const updateBook = await books.updateOne(
             { _id: new ObjectId(borrow.bookId) },
-            [{
-                $set: {
-                    availableCopies: {
-                        $toString: {
-                            $add: [
-                                { $toInt: '$availableCopies' }, 1
-                            ]
-                        }
-                    }
-                }
-            }]
+            { $inc: { availableCopies: 1 } }
         );
         if (updateBook.matchedCount === 0) {
             return res.status(404).json({
