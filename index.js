@@ -28,7 +28,7 @@ export async function connectToMongoDB() {
 const connectedClient = await connectToMongoDB();
 const db = connectedClient.db('book-nook');
 const books = db.collection('books');
-const borrowedBooks = db.collection('borrowed-books');
+const borrows = db.collection('borrows');
 /* ================MongoDB==================== */
 
 
@@ -228,7 +228,7 @@ app.delete('/books/:id', async (req, res) => {
 
 });
 
-app.post('/borrowed-books', async (req, res) => {
+app.post('/borrows', async (req, res) => {
     try {
         const borrowedBook = req.body;
 
@@ -289,7 +289,7 @@ app.post('/borrowed-books', async (req, res) => {
             });
         }
 
-        const alreadyBorrowed = await borrowedBooks.findOne({
+        const alreadyBorrowed = await borrows.findOne({
             bookId: borrowedBook.bookId,
             borrowerEmail: borrowedBook.borrowerEmail,
         });
@@ -331,7 +331,7 @@ app.post('/borrowed-books', async (req, res) => {
             });
         }
 
-        const result = await borrowedBooks.insertOne(borrowedBook);
+        const result = await borrows.insertOne(borrowedBook);
         return res.status(201).json({
             success: true,
             message: "Book borrowed successfully",
@@ -348,7 +348,7 @@ app.post('/borrowed-books', async (req, res) => {
 })
 
 
-app.delete('/borrowed-books/:id', async (req, res) => {
+app.delete('/borrows/:id', async (req, res) => {
     try {
         const id = req.params.id;
         const isBorrowIdValid = ObjectId.isValid(id);
@@ -360,7 +360,7 @@ app.delete('/borrowed-books/:id', async (req, res) => {
             });
         }
 
-        const borrow = await borrowedBooks.findOne({ _id: new ObjectId(id) });
+        const borrow = await borrows.findOne({ _id: new ObjectId(id) });
         if (!borrow) {
             return res.status(404).json({
                 success: false,
@@ -400,7 +400,7 @@ app.delete('/borrowed-books/:id', async (req, res) => {
             });
         }
 
-        const result = await borrowedBooks.deleteOne({ _id: new ObjectId(id) });
+        const result = await borrows.deleteOne({ _id: new ObjectId(id) });
         if (result.deletedCount === 0) {
             return res.status(404).json({
                 success: false,
@@ -427,7 +427,7 @@ app.delete('/borrowed-books/:id', async (req, res) => {
     }
 })
 
-app.get("/borrowed-books", async (req, res) => {
+app.get("/borrows", async (req, res) => {
     try {
         const { borrowerEmail } = req.query;
 
@@ -447,7 +447,7 @@ app.get("/borrowed-books", async (req, res) => {
             });
         }
 
-        const result = await borrowedBooks
+        const result = await borrows
             .find({ borrowerEmail })
             .toArray();
 
