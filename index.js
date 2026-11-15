@@ -11,8 +11,6 @@ const PORT = process.env.PORT || 5000;
 app.use(cors());
 app.use(express.json());
 
-
-
 /* ================MongoDB==================== */
 
 const client = new MongoClient(process.env.MONGODB_SECRET_URI);
@@ -22,7 +20,8 @@ export async function connectToMongoDB() {
         console.log("You successfully connected to MongoDB!");
         return client;
     } catch (err) {
-        console.dir(err);
+        console.error("MongoDB connection failed", err);
+        throw err;
     }
 }
 
@@ -39,72 +38,174 @@ const borrowedBooks = db.collection('borrowed-books');
 
 
 app.get("/", (req, res) => {
-    res.send({
+    return res.status(200).json({
         success: true,
         message: "Book Nook server running successfully",
+        data: {
+            name: "BookNook API",
+        },
     });
 });
 
 
 app.get('/books', async (req, res) => {
-
     const allBooks = await books.find({}).toArray();
-    res.send(allBooks);
+    return res.status(200).json({
+        success: true,
+        message: "Books retrieved successfully",
+        data: allBooks,
+    });
 })
 
 app.get('/books/:id', async (req, res) => {
-
     const id = req.params.id;
+    if (!ObjectId.isValid(id)) {
+        return res.status(400).json({
+            success: false,
+            message: "Invalid book ID",
+            data: null,
+        });
+    }
 
     const singleBook = await books.findOne({ _id: new ObjectId(id) });
-    res.send(singleBook);
+    if (!singleBook) {
+        return res.status(404).json({
+            success: false,
+            message: "Book not found",
+            data: null,
+        });
+    }
 
+    return res.status(200).json({
+        success: true,
+        message: "Book retrieved successfully",
+        data: singleBook,
+    });
 })
 
 app.post('/books', async (req, res) => {
-
     const newBook = req.body;
+    if (
+        newBook === null ||
+        typeof newBook !== "object" ||
+        Array.isArray(newBook) ||
+        Object.keys(newBook).length === 0
+    ) {
+        return res.status(400).json({
+            success: false,
+            message: "A book object is required",
+            data: null,
+        });
+    }
+
     const result = await books.insertOne(newBook);
-    res.send(result);
+    return res.status(201).json({
+        success: true,
+        message: "Book added successfully",
+        data: result,
+    });
 
 })
 
 app.patch('/books/:id', async (req, res) => {
-
     const id = req.params.id;
     const updatedBook = req.body;
-    const query = { _id: new ObjectId(id) };
+    if (!ObjectId.isValid(id)) {
+        return res.status(400).json({
+            success: false,
+            message: "Invalid book ID",
+            data: null,
+        });
+    }
+    if (
+        updatedBook === null ||
+        typeof updatedBook !== "object" ||
+        Array.isArray(updatedBook) ||
+        Object.keys(updatedBook).length === 0 ||
+        "_id" in updatedBook
+    ) {
+        return res.status(400).json({
+            success: false,
+            message: "A valid book update is required",
+            data: null,
+        });
+    }
 
-    const result = await books.updateOne(query, { $set: updatedBook });
-    res.send(result);
+    const result = await books.updateOne(
+        { _id: new ObjectId(id) },
+        { $set: updatedBook }
+    );
+    if (result.matchedCount === 0) {
+        return res.status(404).json({
+            success: false,
+            message: "Book not found",
+            data: null,
+        });
+    }
 
+    return res.status(200).json({
+        success: true,
+        message: "Book updated successfully",
+        data: result,
+    });
 
 });
 
 app.delete('/books/:id', async (req, res) => {
-
     const id = req.params.id;
-    const query = { _id: new ObjectId(id) };
+    if (!ObjectId.isValid(id)) {
+        return res.status(400).json({
+            success: false,
+            message: "Invalid book ID",
+            data: null,
+        });
+    }
 
-    const result = await books.deleteOne(query);
-    res.send(result);
+    const result = await books.deleteOne({ _id: new ObjectId(id) });
+    if (result.deletedCount === 0) {
+        return res.status(404).json({
+            success: false,
+            message: "Book not found",
+            data: null,
+        });
+    }
 
+    return res.status(200).json({
+        success: true,
+        message: "Book deleted successfully",
+        data: result,
+    });
 
 });
 
 app.post('/borrowed-books', async (req, res) => {
     try {
         const borrowedBook = req.body;
+        if (
+            borrowedBook === null ||
+            typeof borrowedBook !== "object" ||
+            Array.isArray(borrowedBook) ||
+            typeof borrowedBook.bookId !== "string" ||
+            !ObjectId.isValid(borrowedBook.bookId) ||
+            typeof borrowedBook.borrowerEmail !== "string" ||
+            !borrowedBook.borrowerEmail.trim()
+        ) {
+            return res.status(400).json({
+                success: false,
+                message: "A valid book ID and borrower email are required",
+                data: null,
+            });
+        }
 
         const alreadyBorrowed = await borrowedBooks.findOne({
             bookId: borrowedBook.bookId,
             borrowerEmail: borrowedBook.borrowerEmail,
-        })
-
+        });
         if (alreadyBorrowed) {
-            return res.status(409).send({
+            return res.status(409).json({
                 success: false,
-                message: "You have already borrowed this book!",
+                message: "You have already borrowed this book",
+                data: null,
             });
         }
 
@@ -130,38 +231,57 @@ app.post('/borrowed-books', async (req, res) => {
                 }
             ]
         );
-
         if (updateBook.modifiedCount === 0) {
-            return res.status(400).send({
+            return res.status(409).json({
                 success: false,
-                message: "Book is not available!"
+                message: "Book not found or unavailable",
+                data: null,
             });
         }
 
         const result = await borrowedBooks.insertOne(borrowedBook);
-
-        res.status(201).send({
+        return res.status(201).json({
             success: true,
-            message: "Book borrowed successfully!",
-            result,
+            message: "Book borrowed successfully",
+            data: result,
         });
-
     } catch (err) {
-        res.status(500).send({
+        console.error("Failed to borrow book", err);
+        return res.status(500).json({
             success: false,
-            message: err.message || "Something went wrong!",
-        })
+            message: "Failed to borrow book",
+            data: null,
+        });
     }
 })
 
 
 app.delete('/borrowed-books/:id', async (req, res) => {
     try {
-        const id = req.params.id
-        const { bookId } = req.body
+        const id = req.params.id;
+        if (!ObjectId.isValid(id)) {
+            return res.status(400).json({
+                success: false,
+                message: "Invalid borrow ID",
+                data: null,
+            });
+        }
+
+        const borrow = await borrowedBooks.findOne({ _id: new ObjectId(id) });
+        if (!borrow) {
+            return res.status(404).json({
+                success: false,
+                message: "Borrow record not found",
+                data: null,
+            });
+        }
+
+        if (typeof borrow.bookId !== "string" || !ObjectId.isValid(borrow.bookId)) {
+            throw new Error("Borrow record contains an invalid book ID");
+        }
 
         const updateBook = await books.updateOne(
-            { _id: new ObjectId(bookId) },
+            { _id: new ObjectId(borrow.bookId) },
             [{
                 $set: {
                     availableCopies: {
@@ -174,50 +294,117 @@ app.delete('/borrowed-books/:id', async (req, res) => {
                 }
             }]
         );
+        if (updateBook.matchedCount === 0) {
+            return res.status(404).json({
+                success: false,
+                message: "Book not found",
+                data: null,
+            });
+        }
 
         const result = await borrowedBooks.deleteOne({ _id: new ObjectId(id) });
+        if (result.deletedCount === 0) {
+            return res.status(404).json({
+                success: false,
+                message: "Borrow record not found",
+                data: null,
+            });
+        }
 
-        res.send({
+        return res.status(200).json({
             success: true,
-            message: 'you successfully returned this book',
-            updateBook,
-            result
-        })
-
+            message: "Book returned successfully",
+            data: {
+                updateBook,
+                result,
+            },
+        });
     } catch (err) {
-        res.status(500).send({
+        console.error("Failed to return book", err);
+        return res.status(500).json({
             success: false,
-            message: err.message || "Something went wrong!",
-        })
+            message: "Failed to return book",
+            data: null,
+        });
     }
 })
-
-
 
 app.get("/borrowed-books", async (req, res) => {
     try {
         const { borrowerEmail } = req.query;
+        if (typeof borrowerEmail !== "string" || !borrowerEmail.trim()) {
+            return res.status(400).json({
+                success: false,
+                message: "A borrower email is required",
+                data: null,
+            });
+        }
 
         const result = await borrowedBooks
             .find({ borrowerEmail })
             .toArray();
 
-        res.send(result);
-    } catch (error) {
-        res.status(500).send({
+        return res.status(200).json({
+            success: true,
+            message: "Borrowed books retrieved successfully",
+            data: result,
+        });
+    } catch (err) {
+        console.error("Failed to fetch borrowed books", err);
+        return res.status(500).json({
             success: false,
             message: "Failed to fetch borrowed books",
-            error: error.message,
+            data: null,
         });
     }
 });
 
-
 app.get('/my-books/:email', async (req, res) => {
     const email = req.params.email;
     const myBooks = await books.find({ addedBy: email }).sort({ _id: -1 }).toArray();
-    res.send(myBooks);
+    return res.status(200).json({
+        success: true,
+        message: "Your books retrieved successfully",
+        data: myBooks,
+    });
 })
+
+app.use((req, res) => {
+    return res.status(404).json({
+        success: false,
+        message: "Route not found",
+        data: null,
+    });
+});
+
+app.use((err, req, res, next) => {
+    console.error("API request failed", err);
+
+    if (res.headersSent) {
+        return next(err);
+    }
+
+    if (err.type === "entity.parse.failed") {
+        return res.status(400).json({
+            success: false,
+            message: "Invalid JSON request body",
+            data: null,
+        });
+    }
+    if (err.type === "entity.too.large") {
+        return res.status(413).json({
+            success: false,
+            message: "Request body is too large",
+            data: null,
+        });
+    }
+
+    return res.status(500).json({
+        success: false,
+        message: "Internal server error",
+        data: null,
+    });
+});
 
 if (!process.env.VERCEL) {
     app.listen(PORT, () => {
