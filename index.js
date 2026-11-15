@@ -59,7 +59,9 @@ app.get('/books', async (req, res) => {
 
 app.get('/books/:id', async (req, res) => {
     const id = req.params.id;
-    if (!ObjectId.isValid(id)) {
+    // Check whether this ID has a valid MongoDB ObjectId format.
+    const isIdValid = ObjectId.isValid(id);
+    if (isIdValid === false) {
         return res.status(400).json({
             success: false,
             message: "Invalid book ID",
@@ -85,12 +87,31 @@ app.get('/books/:id', async (req, res) => {
 
 app.post('/books', async (req, res) => {
     const newBook = req.body;
-    if (
-        newBook === null ||
-        typeof newBook !== "object" ||
-        Array.isArray(newBook) ||
-        Object.keys(newBook).length === 0
-    ) {
+    if (newBook === null || newBook === undefined) {
+        return res.status(400).json({
+            success: false,
+            message: "A book object is required",
+            data: null,
+        });
+    }
+
+    if (typeof newBook !== "object") {
+        return res.status(400).json({
+            success: false,
+            message: "A book object is required",
+            data: null,
+        });
+    }
+
+    if (Array.isArray(newBook)) {
+        return res.status(400).json({
+            success: false,
+            message: "A book object is required",
+            data: null,
+        });
+    }
+
+    if (Object.keys(newBook).length === 0) {
         return res.status(400).json({
             success: false,
             message: "A book object is required",
@@ -110,20 +131,48 @@ app.post('/books', async (req, res) => {
 app.patch('/books/:id', async (req, res) => {
     const id = req.params.id;
     const updatedBook = req.body;
-    if (!ObjectId.isValid(id)) {
+    const isIdValid = ObjectId.isValid(id);
+    if (isIdValid === false) {
         return res.status(400).json({
             success: false,
             message: "Invalid book ID",
             data: null,
         });
     }
-    if (
-        updatedBook === null ||
-        typeof updatedBook !== "object" ||
-        Array.isArray(updatedBook) ||
-        Object.keys(updatedBook).length === 0 ||
-        "_id" in updatedBook
-    ) {
+
+    if (updatedBook === null || updatedBook === undefined) {
+        return res.status(400).json({
+            success: false,
+            message: "A valid book update is required",
+            data: null,
+        });
+    }
+
+    if (typeof updatedBook !== "object") {
+        return res.status(400).json({
+            success: false,
+            message: "A valid book update is required",
+            data: null,
+        });
+    }
+
+    if (Array.isArray(updatedBook)) {
+        return res.status(400).json({
+            success: false,
+            message: "A valid book update is required",
+            data: null,
+        });
+    }
+
+    if (Object.keys(updatedBook).length === 0) {
+        return res.status(400).json({
+            success: false,
+            message: "A valid book update is required",
+            data: null,
+        });
+    }
+
+    if ("_id" in updatedBook) {
         return res.status(400).json({
             success: false,
             message: "A valid book update is required",
@@ -153,7 +202,8 @@ app.patch('/books/:id', async (req, res) => {
 
 app.delete('/books/:id', async (req, res) => {
     const id = req.params.id;
-    if (!ObjectId.isValid(id)) {
+    const isIdValid = ObjectId.isValid(id);
+    if (isIdValid === false) {
         return res.status(400).json({
             success: false,
             message: "Invalid book ID",
@@ -181,15 +231,57 @@ app.delete('/books/:id', async (req, res) => {
 app.post('/borrowed-books', async (req, res) => {
     try {
         const borrowedBook = req.body;
-        if (
-            borrowedBook === null ||
-            typeof borrowedBook !== "object" ||
-            Array.isArray(borrowedBook) ||
-            typeof borrowedBook.bookId !== "string" ||
-            !ObjectId.isValid(borrowedBook.bookId) ||
-            typeof borrowedBook.borrowerEmail !== "string" ||
-            !borrowedBook.borrowerEmail.trim()
-        ) {
+
+        if (borrowedBook === null || borrowedBook === undefined) {
+            return res.status(400).json({
+                success: false,
+                message: "A valid book ID and borrower email are required",
+                data: null,
+            });
+        }
+
+        if (typeof borrowedBook !== "object") {
+            return res.status(400).json({
+                success: false,
+                message: "A valid book ID and borrower email are required",
+                data: null,
+            });
+        }
+
+        if (Array.isArray(borrowedBook)) {
+            return res.status(400).json({
+                success: false,
+                message: "A valid book ID and borrower email are required",
+                data: null,
+            });
+        }
+
+        if (typeof borrowedBook.bookId !== "string") {
+            return res.status(400).json({
+                success: false,
+                message: "A valid book ID and borrower email are required",
+                data: null,
+            });
+        }
+
+        const isBookIdValid = ObjectId.isValid(borrowedBook.bookId);
+        if (isBookIdValid === false) {
+            return res.status(400).json({
+                success: false,
+                message: "A valid book ID and borrower email are required",
+                data: null,
+            });
+        }
+
+        if (typeof borrowedBook.borrowerEmail !== "string") {
+            return res.status(400).json({
+                success: false,
+                message: "A valid book ID and borrower email are required",
+                data: null,
+            });
+        }
+
+        if (borrowedBook.borrowerEmail.trim() === "") {
             return res.status(400).json({
                 success: false,
                 message: "A valid book ID and borrower email are required",
@@ -259,7 +351,8 @@ app.post('/borrowed-books', async (req, res) => {
 app.delete('/borrowed-books/:id', async (req, res) => {
     try {
         const id = req.params.id;
-        if (!ObjectId.isValid(id)) {
+        const isBorrowIdValid = ObjectId.isValid(id);
+        if (isBorrowIdValid === false) {
             return res.status(400).json({
                 success: false,
                 message: "Invalid borrow ID",
@@ -276,7 +369,12 @@ app.delete('/borrowed-books/:id', async (req, res) => {
             });
         }
 
-        if (typeof borrow.bookId !== "string" || !ObjectId.isValid(borrow.bookId)) {
+        if (typeof borrow.bookId !== "string") {
+            throw new Error("Borrow record contains an invalid book ID");
+        }
+
+        const isBookIdValid = ObjectId.isValid(borrow.bookId);
+        if (isBookIdValid === false) {
             throw new Error("Borrow record contains an invalid book ID");
         }
 
@@ -332,7 +430,16 @@ app.delete('/borrowed-books/:id', async (req, res) => {
 app.get("/borrowed-books", async (req, res) => {
     try {
         const { borrowerEmail } = req.query;
-        if (typeof borrowerEmail !== "string" || !borrowerEmail.trim()) {
+
+        if (typeof borrowerEmail !== "string") {
+            return res.status(400).json({
+                success: false,
+                message: "A borrower email is required",
+                data: null,
+            });
+        }
+
+        if (borrowerEmail.trim() === "") {
             return res.status(400).json({
                 success: false,
                 message: "A borrower email is required",
