@@ -19,6 +19,13 @@ const authJwks = createRemoteJWKSet(new URL("/api/auth/jwks", betterAuthURL));
 app.use(cors());
 app.use(express.json());
 
+class ApiError extends Error {
+    constructor(status, message) {
+        super(message);
+        this.status = status;
+    }
+}
+
 async function requireAuth(req, res, next) {
     const authHeader = req.headers.authorization;
     const token = authHeader?.split(" ")[1];
@@ -90,6 +97,16 @@ await books.updateMany(
     { availableCopies: { $type: "string" } },
     [{ $set: { availableCopies: { $toInt: "$availableCopies" } } }]
 );
+
+// Runs every step inside one MongoDB transaction so either all changes commit or none do.
+async function runInTransaction(operation) {
+    const session = await client.startSession();
+    try {
+        await session.withTransaction(operation);
+    } finally {
+        await session.endSession();
+    }
+}
 
 app.get("/", (req, res) => {
     return res.status(200).json({
@@ -430,58 +447,66 @@ app.post('/borrows', requireAuth, async (req, res) => {
         }
 
         const bookObjectId = new ObjectId(borrowedBook.bookId);
-        const book = await books.findOne({ _id: bookObjectId });
-        if (!book) {
-            return res.status(404).json({
-                success: false,
-                message: "Book not found",
-                data: null,
-            });
-        }
+        let insertResult = null;
 
-        const alreadyBorrowed = await borrows.findOne({
-            bookId: borrowedBook.bookId,
-            borrowerEmail: req.auth.email,
+        await runInTransaction(async (transactionSession) => {
+            const book = await books.findOne(
+                { _id: bookObjectId },
+                { session: transactionSession }
+            );
+            if (!book) {
+                throw new ApiError(404, "Book not found");
+            }
+
+            const alreadyBorrowed = await borrows.findOne({
+                bookId: borrowedBook.bookId,
+                borrowerEmail: req.auth.email,
+            }, { session: transactionSession });
+            if (alreadyBorrowed) {
+                throw new ApiError(409, "You have already borrowed this book");
+            }
+
+            const updateBook = await books.updateOne(
+                {
+                    _id: bookObjectId,
+                    availableCopies: { $gt: 0 },
+                },
+                { $inc: { availableCopies: -1 } },
+                { session: transactionSession }
+            );
+            if (updateBook.modifiedCount === 0) {
+                throw new ApiError(409, "Book not found or unavailable");
+            }
+
+            const { _id: borrowedObjectId, ...bookData } = book;
+            const borrowRecord = {
+                ...bookData,
+                bookId: borrowedObjectId.toString(),
+                borrowerEmail: req.auth.email,
+                borrowerName: req.auth.name,
+                borrowedDate: todayDate,
+                returnDate: borrowedBook.returnDate,
+            };
+            insertResult = await borrows.insertOne(
+                borrowRecord,
+                { session: transactionSession }
+            );
         });
-        if (alreadyBorrowed) {
-            return res.status(409).json({
-                success: false,
-                message: "You have already borrowed this book",
-                data: null,
-            });
-        }
 
-        const updateBook = await books.updateOne(
-            {
-                _id: bookObjectId,
-                availableCopies: { $gt: 0 },
-            },
-            { $inc: { availableCopies: -1 } }
-        );
-        if (updateBook.modifiedCount === 0) {
-            return res.status(409).json({
-                success: false,
-                message: "Book not found or unavailable",
-                data: null,
-            });
-        }
-
-        const { _id: borrowedObjectId, ...bookData } = book;
-        const borrowRecord = {
-            ...bookData,
-            bookId: borrowedObjectId.toString(),
-            borrowerEmail: req.auth.email,
-            borrowerName: req.auth.name,
-            borrowedDate: todayDate,
-            returnDate: borrowedBook.returnDate,
-        };
-        const result = await borrows.insertOne(borrowRecord);
         return res.status(201).json({
             success: true,
             message: "Book borrowed successfully",
-            data: result,
+            data: insertResult,
         });
     } catch (err) {
+        if (err instanceof ApiError) {
+            return res.status(err.status).json({
+                success: false,
+                message: err.message,
+                data: null,
+            });
+        }
+
         console.error("Failed to borrow book", err);
         return res.status(500).json({
             success: false,
@@ -503,38 +528,36 @@ app.delete('/borrows/:id', requireAuth, async (req, res) => {
             });
         }
 
-        const borrow = await borrows.findOne({
-            _id: new ObjectId(id),
-            borrowerEmail: req.auth.email,
+        const borrowObjectId = new ObjectId(id);
+        let updateBook = null;
+        let result = null;
+
+        await runInTransaction(async (transactionSession) => {
+            const borrow = await borrows.findOne({
+                _id: borrowObjectId,
+                borrowerEmail: req.auth.email,
+            }, { session: transactionSession });
+            if (!borrow) {
+                throw new ApiError(404, "Borrow record not found or you are not allowed to return it");
+            }
+
+            updateBook = await books.updateOne(
+                { _id: new ObjectId(borrow.bookId) },
+                { $inc: { availableCopies: 1 } },
+                { session: transactionSession }
+            );
+            if (updateBook.matchedCount === 0) {
+                throw new ApiError(404, "Book not found");
+            }
+
+            result = await borrows.deleteOne(
+                { _id: borrowObjectId },
+                { session: transactionSession }
+            );
+            if (result.deletedCount === 0) {
+                throw new ApiError(404, "Borrow record not found");
+            }
         });
-        if (!borrow) {
-            return res.status(404).json({
-                success: false,
-                message: "Borrow record not found or you are not allowed to return it",
-                data: null,
-            });
-        }
-
-        const updateBook = await books.updateOne(
-            { _id: new ObjectId(borrow.bookId) },
-            { $inc: { availableCopies: 1 } }
-        );
-        if (updateBook.matchedCount === 0) {
-            return res.status(404).json({
-                success: false,
-                message: "Book not found",
-                data: null,
-            });
-        }
-
-        const result = await borrows.deleteOne({ _id: new ObjectId(id) });
-        if (result.deletedCount === 0) {
-            return res.status(404).json({
-                success: false,
-                message: "Borrow record not found",
-                data: null,
-            });
-        }
 
         return res.status(200).json({
             success: true,
@@ -545,6 +568,14 @@ app.delete('/borrows/:id', requireAuth, async (req, res) => {
             },
         });
     } catch (err) {
+        if (err instanceof ApiError) {
+            return res.status(err.status).json({
+                success: false,
+                message: err.message,
+                data: null,
+            });
+        }
+
         console.error("Failed to return book", err);
         return res.status(500).json({
             success: false,
