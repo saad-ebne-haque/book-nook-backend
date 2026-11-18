@@ -20,7 +20,8 @@ app.use(cors());
 app.use(express.json());
 
 async function requireAuth(req, res, next) {
-    const token = req.get("authorization")?.split(" ")[1];
+    const authHeader = req.headers.authorization;
+    const token = authHeader?.split(" ")[1];
 
     if (!token) {
         return res.status(401).json({
