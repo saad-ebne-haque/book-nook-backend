@@ -14,24 +14,15 @@ if (!betterAuthURL) {
     throw new Error("BETTER_AUTH_URL must be configured for API JWT verification");
 }
 
-const authURL = new URL(betterAuthURL);
-const authPath = authURL.pathname.replace(/\/+$/, "");
-const authBasePath = authPath.endsWith("/api/auth")
-    ? authPath
-    : `${authPath}/api/auth`;
-authURL.pathname = `${authBasePath}/jwks`;
-authURL.search = "";
-authURL.hash = "";
-const authJwks = createRemoteJWKSet(authURL);
+const authJwks = createRemoteJWKSet(new URL("/api/auth/jwks", betterAuthURL));
 
 app.use(cors());
 app.use(express.json());
 
 async function requireAuth(req, res, next) {
-    const authorization = req.get("authorization");
-    const match = authorization?.match(/^Bearer\s+(.+)$/i);
+    const token = req.get("authorization")?.split(" ")[1];
 
-    if (!match) {
+    if (!token) {
         return res.status(401).json({
             success: false,
             message: "A valid bearer token is required",
@@ -40,7 +31,7 @@ async function requireAuth(req, res, next) {
     }
 
     try {
-        const { payload } = await jwtVerify(match[1], authJwks, {
+        const { payload } = await jwtVerify(token, authJwks, {
             issuer: betterAuthURL,
             audience: betterAuthURL,
         });
@@ -87,35 +78,17 @@ async function requireAuth(req, res, next) {
     }
 }
 
-/* ================MongoDB==================== */
-
 const client = new MongoClient(process.env.MONGODB_SECRET_URI);
-export async function connectToMongoDB() {
-    try {
-        await client.connect();
-        console.log("You successfully connected to MongoDB!");
-        return client;
-    } catch (err) {
-        console.error("MongoDB connection failed", err);
-        throw err;
-    }
-}
+await client.connect();
+console.log("Connected to MongoDB");
 
-const connectedClient = await connectToMongoDB();
-const db = connectedClient.db('book-nook');
+const db = client.db('book-nook');
 const books = db.collection('books');
 const borrows = db.collection('borrows');
 await books.updateMany(
     { availableCopies: { $type: "string" } },
     [{ $set: { availableCopies: { $toInt: "$availableCopies" } } }]
 );
-/* ================MongoDB==================== */
-
-
-
-
-
-
 
 app.get("/", (req, res) => {
     return res.status(200).json({
@@ -131,19 +104,11 @@ app.get("/", (req, res) => {
 app.get('/books', async (req, res) => {
     const cursor = books.find({});
     if (req.query.limit !== undefined) {
-        if (typeof req.query.limit !== "string" || !/^[1-9]\d*$/.test(req.query.limit)) {
+        const limit = Number(req.query.limit);
+        if (!Number.isSafeInteger(limit) || limit < 1) {
             return res.status(400).json({
                 success: false,
                 message: "Limit must be a positive integer",
-                data: null,
-            });
-        }
-
-        const limit = Number(req.query.limit);
-        if (!Number.isSafeInteger(limit) || limit > 50) {
-            return res.status(400).json({
-                success: false,
-                message: "Limit must be between 1 and 50",
                 data: null,
             });
         }
@@ -161,9 +126,7 @@ app.get('/books', async (req, res) => {
 
 app.get('/books/:id', requireAuth, async (req, res) => {
     const id = req.params.id;
-    // Check whether this ID has a valid MongoDB ObjectId format.
-    const isIdValid = ObjectId.isValid(id);
-    if (isIdValid === false) {
+    if (!ObjectId.isValid(id)) {
         return res.status(400).json({
             success: false,
             message: "Invalid book ID",
@@ -189,23 +152,7 @@ app.get('/books/:id', requireAuth, async (req, res) => {
 
 app.post('/books', requireAuth, async (req, res) => {
     const newBook = req.body;
-    if (newBook === null || newBook === undefined) {
-        return res.status(400).json({
-            success: false,
-            message: "A book object is required",
-            data: null,
-        });
-    }
-
-    if (typeof newBook !== "object") {
-        return res.status(400).json({
-            success: false,
-            message: "A book object is required",
-            data: null,
-        });
-    }
-
-    if (Array.isArray(newBook)) {
+    if (!newBook || typeof newBook !== "object" || Array.isArray(newBook)) {
         return res.status(400).json({
             success: false,
             message: "A book object is required",
@@ -255,8 +202,7 @@ app.post('/books', requireAuth, async (req, res) => {
 app.patch('/books/:id', requireAuth, async (req, res) => {
     const id = req.params.id;
     const updatedBook = req.body;
-    const isIdValid = ObjectId.isValid(id);
-    if (isIdValid === false) {
+    if (!ObjectId.isValid(id)) {
         return res.status(400).json({
             success: false,
             message: "Invalid book ID",
@@ -264,23 +210,7 @@ app.patch('/books/:id', requireAuth, async (req, res) => {
         });
     }
 
-    if (updatedBook === null || updatedBook === undefined) {
-        return res.status(400).json({
-            success: false,
-            message: "A valid book update is required",
-            data: null,
-        });
-    }
-
-    if (typeof updatedBook !== "object") {
-        return res.status(400).json({
-            success: false,
-            message: "A valid book update is required",
-            data: null,
-        });
-    }
-
-    if (Array.isArray(updatedBook)) {
+    if (!updatedBook || typeof updatedBook !== "object" || Array.isArray(updatedBook)) {
         return res.status(400).json({
             success: false,
             message: "A valid book update is required",
@@ -327,8 +257,7 @@ app.patch('/books/:id', requireAuth, async (req, res) => {
 
 app.delete('/books/:id', requireAuth, async (req, res) => {
     const id = req.params.id;
-    const isIdValid = ObjectId.isValid(id);
-    if (isIdValid === false) {
+    if (!ObjectId.isValid(id)) {
         return res.status(400).json({
             success: false,
             message: "Invalid book ID",
@@ -360,23 +289,7 @@ app.post('/borrows', requireAuth, async (req, res) => {
     try {
         const borrowedBook = req.body;
 
-        if (borrowedBook === null || borrowedBook === undefined) {
-            return res.status(400).json({
-                success: false,
-                message: "A valid book ID and return date are required",
-                data: null,
-            });
-        }
-
-        if (typeof borrowedBook !== "object") {
-            return res.status(400).json({
-                success: false,
-                message: "A valid book ID and return date are required",
-                data: null,
-            });
-        }
-
-        if (Array.isArray(borrowedBook)) {
+        if (!borrowedBook || typeof borrowedBook !== "object" || Array.isArray(borrowedBook)) {
             return res.status(400).json({
                 success: false,
                 message: "A valid book ID and return date are required",
@@ -489,8 +402,7 @@ app.post('/borrows', requireAuth, async (req, res) => {
 app.delete('/borrows/:id', requireAuth, async (req, res) => {
     try {
         const id = req.params.id;
-        const isBorrowIdValid = ObjectId.isValid(id);
-        if (isBorrowIdValid === false) {
+        if (!ObjectId.isValid(id)) {
             return res.status(400).json({
                 success: false,
                 message: "Invalid borrow ID",
@@ -508,15 +420,6 @@ app.delete('/borrows/:id', requireAuth, async (req, res) => {
                 message: "Borrow record not found or you are not allowed to return it",
                 data: null,
             });
-        }
-
-        if (typeof borrow.bookId !== "string") {
-            throw new Error("Borrow record contains an invalid book ID");
-        }
-
-        const isBookIdValid = ObjectId.isValid(borrow.bookId);
-        if (isBookIdValid === false) {
-            throw new Error("Borrow record contains an invalid book ID");
         }
 
         const updateBook = await books.updateOne(
