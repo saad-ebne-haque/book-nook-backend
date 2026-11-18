@@ -342,25 +342,108 @@ app.patch('/books/:id', requireAuth, async (req, res) => {
         });
     }
 
-    const protectedFields = ["_id", "addedBy", "addedByName", "availableCopies", "createdAt"];
-    if (protectedFields.some((field) => field in updatedBook)) {
+    const editableFields = new Set([
+        "title",
+        "author",
+        "description",
+        "category",
+        "publishedYear",
+        "totalCopies",
+        "image",
+        "language",
+    ]);
+    if (Object.keys(updatedBook).some((field) => !editableFields.has(field))) {
         return res.status(400).json({
             success: false,
-            message: "Book ownership and inventory fields cannot be updated",
+            message: "The book update contains unsupported fields",
             data: null,
         });
     }
 
-    const result = await books.updateOne(
-        { _id: new ObjectId(id), addedBy: req.auth.email },
-        { $set: updatedBook }
-    );
-    if (result.matchedCount === 0) {
-        return res.status(404).json({
+    const requiredTextFields = ["title", "author", "category", "image", "language"];
+    for (const field of requiredTextFields) {
+        if (field in updatedBook && (typeof updatedBook[field] !== "string" || !updatedBook[field].trim())) {
+            return res.status(400).json({
+                success: false,
+                message: `${field} must be a non-empty text value`,
+                data: null,
+            });
+        }
+    }
+
+    if ("description" in updatedBook && typeof updatedBook.description !== "string") {
+        return res.status(400).json({
             success: false,
-            message: "Book not found or you are not allowed to update it",
+            message: "Description must be text",
             data: null,
         });
+    }
+
+    if ("category" in updatedBook && !["Fiction", "Science", "History", "Kids", "Others"].includes(updatedBook.category)) {
+        return res.status(400).json({
+            success: false,
+            message: "Category must be Fiction, Science, History, Kids, or Others",
+            data: null,
+        });
+    }
+
+    if ("publishedYear" in updatedBook
+        && (!Number.isSafeInteger(updatedBook.publishedYear)
+            || updatedBook.publishedYear < 0
+            || updatedBook.publishedYear > new Date().getFullYear())) {
+        return res.status(400).json({
+            success: false,
+            message: "Published year must be a valid year",
+            data: null,
+        });
+    }
+
+    if ("totalCopies" in updatedBook
+        && (!Number.isSafeInteger(updatedBook.totalCopies) || updatedBook.totalCopies < 1)) {
+        return res.status(400).json({
+            success: false,
+            message: "Total copies must be a positive integer",
+            data: null,
+        });
+    }
+
+    const filter = { _id: new ObjectId(id), addedBy: req.auth.email };
+    let result;
+    try {
+        await runInTransaction(async (transactionSession) => {
+            const existingBook = await books.findOne(filter, { session: transactionSession });
+            if (!existingBook) {
+                throw new ApiError(404, "Book not found or you are not allowed to update it");
+            }
+
+            const fieldsToUpdate = { ...updatedBook };
+            if ("totalCopies" in updatedBook) {
+                const activeBorrowCount = await borrows.countDocuments(
+                    { bookId: id },
+                    { session: transactionSession }
+                );
+                if (updatedBook.totalCopies < activeBorrowCount) {
+                    throw new ApiError(409, "Total copies cannot be fewer than the copies currently borrowed");
+                }
+
+                fieldsToUpdate.availableCopies = updatedBook.totalCopies - activeBorrowCount;
+            }
+
+            result = await books.updateOne(
+                filter,
+                { $set: fieldsToUpdate },
+                { session: transactionSession }
+            );
+        });
+    } catch (error) {
+        if (error instanceof ApiError) {
+            return res.status(error.status).json({
+                success: false,
+                message: error.message,
+                data: null,
+            });
+        }
+        throw error;
     }
 
     return res.status(200).json({
@@ -683,3 +766,4 @@ if (!process.env.VERCEL) {
 }
 
 export default app;
+export { client, db };
