@@ -98,6 +98,12 @@ await books.updateMany(
     [{ $set: { availableCopies: { $toInt: "$availableCopies" } } }]
 );
 
+// Database-level guarantee: one active borrow record per user and book.
+await borrows.createIndex(
+    { bookId: 1, borrowerEmail: 1 },
+    { unique: true, name: "unique_borrow_per_user" }
+);
+
 // Runs every step inside one MongoDB transaction so either all changes commit or none do.
 async function runInTransaction(operation) {
     const session = await client.startSession();
@@ -503,6 +509,15 @@ app.post('/borrows', requireAuth, async (req, res) => {
             return res.status(err.status).json({
                 success: false,
                 message: err.message,
+                data: null,
+            });
+        }
+
+        // The unique index rejects a concurrent duplicate even if the check above passed first.
+        if (err?.code === 11000 || err?.cause?.code === 11000) {
+            return res.status(409).json({
+                success: false,
+                message: "You have already borrowed this book",
                 data: null,
             });
         }
