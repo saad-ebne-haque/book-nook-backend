@@ -103,18 +103,110 @@ app.get("/", (req, res) => {
 
 
 app.get('/books', async (req, res) => {
-    const cursor = books.find({});
-    if (req.query.limit !== undefined) {
-        const limit = Number(req.query.limit);
-        if (!Number.isSafeInteger(limit) || limit < 1) {
-            return res.status(400).json({
-                success: false,
-                message: "Limit must be a positive integer",
-                data: null,
-            });
-        }
+    if (req.query.search !== undefined && typeof req.query.search !== "string") {
+        return res.status(400).json({
+            success: false,
+            message: "Search must be a single text value",
+            data: null,
+        });
+    }
 
-        cursor.sort({ createdAt: -1, _id: -1 }).limit(limit);
+    const search = (req.query.search ?? "").trim();
+    if (search.length > 100) {
+        return res.status(400).json({
+            success: false,
+            message: "Search must be 100 characters or fewer",
+            data: null,
+        });
+    }
+
+    const safeSearch = search.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+    const filter = search
+        ? {
+            $or: [
+                { title: { $regex: safeSearch, $options: "i" } },
+                { author: { $regex: safeSearch, $options: "i" } },
+                { category: { $regex: safeSearch, $options: "i" } },
+            ],
+        }
+        : {};
+
+    const requestedSort = req.query.sort ?? "newest";
+    if (typeof requestedSort !== "string") {
+        return res.status(400).json({
+            success: false,
+            message: "Sort must be a single text value",
+            data: null,
+        });
+    }
+
+    const sortOptions = {
+        newest: { createdAt: -1, _id: -1 },
+        oldest: { createdAt: 1, _id: 1 },
+        title: { title: 1, _id: 1 },
+    };
+    if (!Object.prototype.hasOwnProperty.call(sortOptions, requestedSort)) {
+        return res.status(400).json({
+            success: false,
+            message: "Sort must be newest, oldest, or title",
+            data: null,
+        });
+    }
+
+    const pageValue = req.query.page;
+    const limitValue = req.query.limit;
+    if ((pageValue !== undefined && typeof pageValue !== "string")
+        || (limitValue !== undefined && typeof limitValue !== "string")) {
+        return res.status(400).json({
+            success: false,
+            message: "Page and limit must be single number values",
+            data: null,
+        });
+    }
+
+    const page = pageValue === undefined ? undefined : Number(pageValue);
+    const limit = limitValue === undefined ? undefined : Number(limitValue);
+    if (page !== undefined && (!Number.isSafeInteger(page) || page < 1)) {
+        return res.status(400).json({
+            success: false,
+            message: "Page must be a positive integer",
+            data: null,
+        });
+    }
+    if (limit !== undefined && (!Number.isSafeInteger(limit) || limit < 1 || limit > 100)) {
+        return res.status(400).json({
+            success: false,
+            message: "Limit must be an integer between 1 and 100",
+            data: null,
+        });
+    }
+
+    const cursor = books.find(filter).sort(sortOptions[requestedSort]);
+    if (page !== undefined) {
+        const pageSize = limit ?? 9;
+        const totalBooks = await books.countDocuments(filter);
+        const totalPages = Math.ceil(totalBooks / pageSize);
+        const currentPage = totalPages === 0 ? 1 : Math.min(page, totalPages);
+        const pageBooks = await cursor
+            .skip((currentPage - 1) * pageSize)
+            .limit(pageSize)
+            .toArray();
+
+        return res.status(200).json({
+            success: true,
+            message: "Books retrieved successfully",
+            data: pageBooks,
+            pagination: {
+                currentPage,
+                pageSize,
+                totalBooks,
+                totalPages,
+            },
+        });
+    }
+
+    if (limit !== undefined) {
+        cursor.limit(limit);
     }
 
     const allBooks = await cursor.toArray();
